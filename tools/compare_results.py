@@ -2,6 +2,10 @@
 import gzip
 import os
 import argparse
+import re
+import collections
+import lark
+import itertools
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
@@ -52,126 +56,76 @@ class ListComparer:
     def get_duplicates_of_list2(self):
         return list(set([x for x in self.list2 if self.list2.count(x) > 1]))
 
+Pair = collections.namedtuple('Pair', ['Entry1', 'Entry2', 'Rng1', 'Rng2', 'Score'])
 
-def darwin_intervall_to_list(intervall):
-    # Conwerts a Darwin range into a tuple of (MIN, MAX)
-    entries = intervall.split(".")
-    ilow = int(entries[0])
-    ihigh = int(entries[-1])
-    return ilow, ihigh
-
-
-def candidate_pair_from_string(string):
-    # Extracts the needed data of a pair from a string (from the AllAll output)
-    astring = string
-    #print("string is {}".format(string))
-    string = string.translate(None, "[]")
-    entries = string.split(",")
-    #if not len(entries) == 7:
-        #print(entries)
-        #print(astring)
-    seq1 = int(entries[0])
-    seq2 = int(entries[1])
-    score = int(float(entries[2]))
-    distance = float(entries[3])
-    int1 = darwin_intervall_to_list(entries[4])
-    int2 = darwin_intervall_to_list(entries[5])
-    variance = float(entries[6])
-    return seq1, seq2, int1, int2, score
+grammar = '''ref: ( ref_fun )*
+             ?ref_fun: "RefinedMatches(" matches ")" _TERM
+             matches: "[" [ match ("," match)* ] "]"
+             match : "NULL"
+                   | "[" int_ "," int_ "," real_ "," real_ "," rng "," rng "," real_ [ "," int_ ] "]"
+             ?int_  : /[0-9]+/     -> int_
+             ?real_ : /[0-9.]+/    -> real
+             rng    : int_ _RNG int_
+             _RNG   : ".."
+             _TERM : /[:;]/
+             %import common.WS
+             %ignore WS
+             '''
 
 
-def process_compressed_file(filename):
-    # Read the lines of a zipped AllAll-output file
-    print("file is {}".format(filename))
-    f = gzip.open(filename)
-    f_content = f.readlines()
-    f.close()
-    data_lines = [
-        s.split(",\n")[0].translate(None, "[]):\n") for s in f_content if "[" in s
-    ]
-    data_lines = [s for s in data_lines if not s.startswith("#") and not s.startswith("Refined")]
-    candidates = []
-    for d in data_lines:
-        if not d.strip():
-            continue
-        cp = candidate_pair_from_string(d)
-        if cp[4] >= 181.0:
-            candidates.append(cp)
-    return candidates
+class MatchTrans(lark.Transformer):
+    def int_(self, vals):
+        return int(vals[0])
+
+    def rng(self, vals):
+        return vals[0], vals[1]
+
+    def real(self, vals):
+        return float(vals[0])
+
+    def match(self, vals):
+        if len(vals) >= 5:
+            return Pair(vals[0], vals[1], vals[4], vals[5], int(vals[2]))
+
+    def matches(self, vals):
+        return [v for v in vals if v is not None]
+
+    def ref(self, matches):
+        return itertools.chain.from_iterable(matches)
 
 
 def process_file(filename):
-    # Read the lines of a unzipped AllAll-output file
-    f = open(filename)
-    f_content = f.readlines()
-    f.close()
-    data_lines = [
-        s.split(",\n")[0].translate(None, "[]):\n") for s in f_content if "[" in s
-    ]
-    data_lines = [s for s in data_lines if not s.startswith("#")]
-    candidates = []
-    for d in data_lines:
-        if not d.strip():
-            continue
-        cp = candidate_pair_from_string(d)
-        candidates.append(cp)
-    return candidates
+    print("file is {}".format(filename))
+    open_ = gzip.open if filename.endswith('.gz') else open
+    parser = lark.Lark(grammar, start='ref', parser='lalr', transformer=MatchTrans())
+    with open_(filename) as fh:
+        data = "\n".join([line for line in fh if not line.startswith('#')])
+        matches = parser.parse(data)
+    return matches
 
 
-def fill_dictionary(folderpath, dictionary):
-    # Fills up the dictionary (based on the folder name)
+def load_matches(folderpath, minscore=181, genome_pairs=None):
+    result = collections.defaultdict(list)
     folders = [x[0] for x in os.walk(folderpath) if x[0] != folderpath]
     for folder in folders:
         genome1 = folder.split("/")[-1]
-        files = [
-            f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))
-        ]
-        file_names = [f for f in files if f.endswith(".gz")]
-        for compressed_file in file_names:
-            genome2 = compressed_file.split("/")[-1].split("_")[0].split(".gz")[0]
-            full_file_path = os.path.join(folder, compressed_file)
-            candidates = process_compressed_file(full_file_path)
-            key = tuple([genome1.lower(), genome2.lower()])
-            if not key in dictionary:
-                dictionary[key] = list()
-            dictionary[key].extend(candidates)
+        files = [f for f in os.listdir(folder) 
+                 if os.path.isfile(os.path.join(folder, f)) and not '.sha2.' in f]
+        for fname in files:
+            genome2 = fname.split("/")[-1].split("_")[0].split(".gz")[0]
+            full_file_path = os.path.join(folder, fname)
+            if genome_pairs is not None and (genome1, genome2) not in genome_pairs:
+                 print("skipping genome pair file {}".format(full_file_path))
+                 continue
+            candidates = [pair for pair in process_file(full_file_path) if pair.Score >= minscore]
+            key = (genome1, genome2)
+            result[key].extend(candidates)
+    return result
 
 
-def fill_dictionary_nogz(folderpath, dictionary):
-    # Fills up the dictionary (based on the folder name)
-    folders = [x[0] for x in os.walk(folderpath) if x[0] != folderpath]
-    for folder in folders:
-        genome1 = folder.split("/")[-1].upper()
-        files = [
-            f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))
-        ]
-        file_names = files  # [f for f in files if f.endswith('.gz')]
-        for compressed_file in file_names:
-            genome2 = (
-                compressed_file.split("/")[-1].split("_")[0].upper()
-            )  # .split('.gz')[0]
-            # print("genome 2 is {}".format(genome2))
-            full_file_path = os.path.join(folder, compressed_file)
-            candidates = process_file(full_file_path)
-            key = tuple([genome1.lower(), genome2.lower()])
-            if key not in dictionary:
-                dictionary[key] = list()
-            dictionary[key].extend(candidates)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Compare two Darwin result DBs.")
-    parser.add_argument("allalldir", help="The dir with gz files from allall")
-    parser.add_argument("protclusterdir", help="The dir with files from protcluster")
-
-    args = parser.parse_args()
-
-    ref_dict = dict()
-    data_dict = dict()
-
-    fill_dictionary(args.allalldir, ref_dict)
-    fill_dictionary_nogz(args.protclusterdir, data_dict)
-    #fill_dictionary(args.protclusterdir, data_dict)
+def main(protclusterdir, allalldir, minscore):
+    data_dict = load_matches(protclusterdir, minscore)
+    ref_dict = load_matches(allalldir, minscore, data_dict.keys()) 
 
     if set(ref_dict) != set(data_dict):
         print(set(ref_dict))
@@ -200,9 +154,16 @@ def main():
 
         additional_pairs_in_ref[ref_key] = list_comp.only_in_list1()
         additional_pairs_in_data[ref_key] = list_comp.only_in_list2()
+        for dubious in list_comp.only_in_list2():
+            for possible_cand in list_comp.only_in_list1():
+                if dubious.Entry1 == possible_cand.Entry1 and dubious.Entry2 == possible_cand.Entry2:
+                    print("match only in data found with modification in ref:\n  {} vs {}".format(dubious, possible_cand))
+                    break
+                
 
     print("additional in data:\n {}".format(additional_pairs_in_data))
     print("additional in ref:\n {}".format(additional_pairs_in_ref))
+    
 
     missed_scores = []
     for key, value in additional_pairs_in_ref.iteritems():
@@ -241,4 +202,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Compare two Darwin result DBs.")
+    parser.add_argument('--minscore','-s', default=181, type=float, help="Min score threshold to filter allall files")
+    parser.add_argument("allalldir", help="The dir with gz files from allall")
+    parser.add_argument("protclusterdir", help="The dir with files from protcluster")
+
+    conf = parser.parse_args()
+
+    main(conf.protclusterdir, conf.allalldir, conf.minscore)
