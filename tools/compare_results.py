@@ -5,6 +5,7 @@ import argparse
 import re
 import collections
 import lark
+import csv
 import itertools
 import matplotlib as mpl
 mpl.use('Agg')
@@ -164,21 +165,27 @@ def main(protclusterdir, allalldir, minscore):
     print("additional in data:\n {}".format(additional_pairs_in_data))
     print("additional in ref:\n {}".format(additional_pairs_in_ref))
     
-
+    
     missed_scores = []
-    for key, value in additional_pairs_in_ref.iteritems():
-        #print("key {}, value {}".format(key, value))
-        # iterate over values, get all missed scores
-        for v in value:
-            missed_scores.append(int(v[-1]))
+    dataset_name = protclusterdir.split('/')[-1]
+    with open(os.path.join(protclusterdir, 'missed.txt'), 'w') as fout:
+        csv_writer = csv.writer(fout, delimiter='\t')
+        csv_writer.writerow(["Dataset","Genome1","Genome2","Entry1","Entry2","Score"])
+
+        for key, value in additional_pairs_in_ref.iteritems():
+            #print("key {}, value {}".format(key, value))
+            # iterate over values, get all missed scores
+            for v in value:
+                missed_scores.append(int(v[-1]))
+                csv_writer.writerow([dataset_name, key[0], key[1], v.Entry1, v.Entry2, v.Score])
 
     missed_scores.sort(reverse=True)
     print("missed scores are {}".format(missed_scores))
-    fig = plt.hist(missed_scores)
+    fig = plt.hist(missed_scores, 'scott')
     plt.title("ClusterMerge: Scores of Missed Matches")
     plt.xlabel("Score")
     plt.ylabel("Number of Missed Matches")
-    plt.savefig("hist.png")
+    plt.savefig("hist-{}.png".format(protclusterdir.split('/')[-1]))
     print("average missed score is {}".format(sum(missed_scores) / len(missed_scores)))
     print("median missed score is {}".format(missed_scores[len(missed_scores)/2]))
 
