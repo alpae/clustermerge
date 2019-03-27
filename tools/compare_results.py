@@ -160,11 +160,9 @@ def main(protclusterdir, allalldir, minscore):
                 if dubious.Entry1 == possible_cand.Entry1 and dubious.Entry2 == possible_cand.Entry2:
                     print("match only in data found with modification in ref:\n  {} vs {}".format(dubious, possible_cand))
                     break
-                
 
     print("additional in data:\n {}".format(additional_pairs_in_data))
     print("additional in ref:\n {}".format(additional_pairs_in_ref))
-    
     
     missed_scores = []
     dataset_name = protclusterdir.split('/')[-1]
@@ -178,6 +176,12 @@ def main(protclusterdir, allalldir, minscore):
             for v in value:
                 missed_scores.append(int(v[-1]))
                 csv_writer.writerow([dataset_name, key[0], key[1], v.Entry1, v.Entry2, v.Score])
+    with open(os.path.join(protclusterdir, 'reference_scores.txt'), 'w') as fout:
+        csv_writer = csv.writer(fout, delimiter='\t')
+        csv_writer.writerow(["Dataset","Genome1","Genome2","Entry1","Entry2","Score"])
+        for (genome1, genome2), matches in ref_dict.items():
+            for m in matches:
+                csv_writer.writerow(['ref', genome1, genome2, m.Entry1, m.Entry2, m.Score])
 
     missed_scores.sort(reverse=True)
     print("missed scores are {}".format(missed_scores))
