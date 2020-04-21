@@ -531,18 +531,25 @@ void ClusterSet::ScheduleAlignments(AllAllBase* executor,
 
   CandidateMap candidate_map(40000000);  // only a few MB
   uint64_t num_avoided = 0, num_scheduled = 0;
+  int cluster_nr = 0;
   auto time_last_candmap_status = std::chrono::high_resolution_clock::now();
 
   for (const auto& cluster : clusters_) {
-    // std::cout << "Cluster has " << cluster.Sequences().size() << " seqs\n";
+    cluster_nr++;
+    std::cout << "Cluster " << cluster_nr << " has " << cluster.Sequences().size() << " seqs" << std::endl;
     if (cluster.IsDuplicate()) {
       continue;
     }
+
+    uint64_t nr_pairs_in_cluster = 0;
+    uint64_t expected_nr_pairs_in_cluster = cluster.Sequences().size()*(cluster.Sequences().size()-1)/2;
     for (auto it = cluster.Sequences().begin(); it != cluster.Sequences().end();
          it++) {
+      auto seq1 = *it;
+      std::cout << " seq1 id (of cluster " << cluster_nr << ") is " << sequences[seq1].ID() << std::endl;
       for (auto itt = next(it); itt != cluster.Sequences().end(); itt++) {
-        auto seq1 = *it;
         auto seq2 = *itt;
+        nr_pairs_in_cluster++;
 
         if (sequences[seq1].Genome() == sequences[seq2].Genome() &&
             sequences[seq1].GenomeIndex() == sequences[seq2].GenomeIndex()) {
@@ -573,6 +580,10 @@ void ClusterSet::ScheduleAlignments(AllAllBase* executor,
         } else {
           num_avoided++;
         }
+        if (nr_pairs_in_cluster >= expected_nr_pairs_in_cluster){
+          std::cout << "DUBIOUS cluster ("<<cluster_nr<<"): created " << nr_pairs_in_cluster << ", but expecting at most " 
+                    << expected_nr_pairs_in_cluster << ": This pair is " << sequences[seq1].ID() << "," << sequences[seq2].ID() << std::endl;
+        }
         auto cur_time = std::chrono::high_resolution_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(cur_time - time_last_candmap_status).count() > 60000){
           time_t now_time = std::time(0);
@@ -580,7 +591,7 @@ void ClusterSet::ScheduleAlignments(AllAllBase* executor,
           process_mem_usage(vm, rss); 
           std::cout << "[" << std::put_time(std::localtime(&now_time), "%F %T") << "]" 
                     << " current candidate map size: " << candidate_map.size() 
-                    << " vsize: " << vm << "KB, RSS: " << rss << "KB, " 
+                    << " vsize: " << vm/1024 << " MB, RSS: " << rss/1024 << " MB, " 
                     << " scheduled/avoided pairs: " << num_scheduled << "/" 
                     << num_avoided << std::endl;
           time_last_candmap_status = cur_time;
